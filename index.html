@@ -129,6 +129,20 @@
     height: 100vh;
     border-radius: 0;
   }
+  /* بديل الشاشة الكاملة عبر CSS للمتصفحات التي لا تدعم Fullscreen API (مثل Safari على iOS) */
+  #map.leaflet-fake-fullscreen {
+    position: fixed !important;
+    top: 0 !important;
+    left: 0 !important;
+    right: 0 !important;
+    bottom: 0 !important;
+    width: 100vw !important;
+    height: 100vh !important;
+    max-width: none !important;
+    border-radius: 0 !important;
+    border: none !important;
+    z-index: 99999 !important;
+  }
   .examples {
     font-size: 12px;
     color: #64748b;
@@ -292,8 +306,17 @@ const FullscreenControl = L.Control.extend({
     link.style.alignItems = 'center';
     link.style.justifyContent = 'center';
 
+    const mapContainer = map.getContainer();
+    // بعض المتصفحات (مثل Safari على iOS) لا تدعم Fullscreen API إطلاقًا على عنصر
+    // عادي مثل الخريطة، لذلك نستخدم بديلًا يعتمد على CSS فقط (محاكاة شاشة كاملة
+    // بتثبيت موضع عنصر الخريطة ليغطي الشاشة بالكامل) عندما تكون الـ API غير مدعومة.
+    const nativeSupported = !!(
+      mapContainer.requestFullscreen || mapContainer.webkitRequestFullscreen
+    );
+    let manualActive = false;
+
     function isFullscreen() {
-      return !!(document.fullscreenElement || document.webkitFullscreenElement);
+      return manualActive || !!(document.fullscreenElement || document.webkitFullscreenElement);
     }
 
     function updateIcon() {
@@ -301,16 +324,49 @@ const FullscreenControl = L.Control.extend({
       link.title = isFullscreen() ? 'إنهاء الشاشة الكاملة' : 'شاشة كاملة';
     }
 
+    function enterManual() {
+      manualActive = true;
+      L.DomUtil.addClass(mapContainer, 'leaflet-fake-fullscreen');
+      document.body.style.overflow = 'hidden';
+      updateIcon();
+      setTimeout(function () { map.invalidateSize(); }, 150);
+    }
+
+    function exitManual() {
+      manualActive = false;
+      L.DomUtil.removeClass(mapContainer, 'leaflet-fake-fullscreen');
+      document.body.style.overflow = '';
+      updateIcon();
+      setTimeout(function () { map.invalidateSize(); }, 150);
+    }
+
     L.DomEvent.on(link, 'click', function (e) {
       L.DomEvent.preventDefault(e);
       L.DomEvent.stopPropagation(e);
-      const mapContainer = map.getContainer();
-      if (!isFullscreen()) {
-        if (mapContainer.requestFullscreen) mapContainer.requestFullscreen();
-        else if (mapContainer.webkitRequestFullscreen) mapContainer.webkitRequestFullscreen();
-      } else {
+
+      if (manualActive) { exitManual(); return; }
+
+      if (document.fullscreenElement || document.webkitFullscreenElement) {
         if (document.exitFullscreen) document.exitFullscreen();
         else if (document.webkitExitFullscreen) document.webkitExitFullscreen();
+        return;
+      }
+
+      if (nativeSupported) {
+        try {
+          const req = mapContainer.requestFullscreen
+            ? mapContainer.requestFullscreen()
+            : mapContainer.webkitRequestFullscreen();
+          // بعض المتصفحات تُرجع Promise يُرفض فعليًا دون دعم حقيقي؛ في هذه الحالة
+          // ننتقل تلقائيًا للبديل القائم على CSS
+          if (req && typeof req.catch === 'function') {
+            req.catch(function () { enterManual(); });
+          }
+        } catch (err) {
+          enterManual();
+        }
+      } else {
+        enterManual();
       }
     });
 
@@ -321,6 +377,11 @@ const FullscreenControl = L.Control.extend({
     document.addEventListener('webkitfullscreenchange', function () {
       updateIcon();
       setTimeout(function () { map.invalidateSize(); }, 150);
+    });
+
+    // يسمح بالخروج من الوضع البديل بمفتاح Escape مثل الشاشة الكاملة الحقيقية
+    document.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape' && manualActive) exitManual();
     });
 
     L.DomEvent.disableClickPropagation(container);
